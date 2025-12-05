@@ -1,0 +1,445 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://a22.dev/schema/ir-v1.0.json",
+    "title": "A22 Canonical IR v1.0",
+    "description": "Canonical Intermediate Representation for A22 agentic systems.",
+    "type": "object",
+    "required": [
+        "version",
+        "agents",
+        "tools",
+        "flows"
+    ],
+    "properties": {
+        "version": {
+            "type": "string",
+            "pattern": "^1\\.0(\\.\\d+)?$"
+        },
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "updated_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "agents": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$definitions/agent"
+            }
+        },
+        "tools": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$definitions/tool"
+            }
+        },
+        "types": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$definitions/customType"
+            }
+        },
+        "flows": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$definitions/flow"
+            }
+        },
+        "capabilities": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$definitions/capability"
+            }
+        }
+    },
+    "$defs": {
+        "agent": {
+            "type": "object",
+            "required": [
+                "id",
+                "name",
+                "model",
+                "inputs",
+                "outputs"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "object",
+                    "required": [
+                        "provider",
+                        "name"
+                    ],
+                    "properties": {
+                        "provider": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "params": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                },
+                "system_prompt": {
+                    "type": "string"
+                },
+                "inputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/typeRef"
+                    }
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/typeRef"
+                    }
+                },
+                "memory": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "strategy": {
+                            "type": "string",
+                            "enum": [
+                                "none",
+                                "window",
+                                "semantic",
+                                "hybrid"
+                            ]
+                        },
+                        "params": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                },
+                "permissions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/permission"
+                    }
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "tool": {
+            "type": "object",
+            "required": [
+                "id",
+                "name",
+                "schema"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "$ref": "#/$definitions/typeRef"
+                        },
+                        "output": {
+                            "$ref": "#/$definitions/typeRef"
+                        }
+                    }
+                },
+                "runtime": {
+                    "type": "string",
+                    "enum": [
+                        "http",
+                        "js",
+                        "python",
+                        "native"
+                    ]
+                },
+                "config": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "customType": {
+            "type": "object",
+            "required": [
+                "name",
+                "fields"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/field"
+                    }
+                }
+            }
+        },
+        "field": {
+            "type": "object",
+            "required": [
+                "name",
+                "type"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/$definitions/typeRef"
+                },
+                "optional": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "typeRef": {
+            "type": "object",
+            "required": [
+                "type"
+            ],
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "object",
+                        "array",
+                        "any",
+                        "custom"
+                    ]
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "object",
+                    "$ref": "#/$definitions/typeRef"
+                }
+            }
+        },
+        "flow": {
+            "type": "object",
+            "required": [
+                "id",
+                "name",
+                "steps"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "inputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/typeRef"
+                    }
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/flowStep"
+                    }
+                },
+                "outputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/typeRef"
+                    }
+                },
+                "error_boundary": {
+                    "$ref": "#/$definitions/errorBoundary"
+                }
+            }
+        },
+        "flowStep": {
+            "type": "object",
+            "required": [
+                "id",
+                "kind"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "agent",
+                        "tool",
+                        "branch",
+                        "parallel",
+                        "subflow"
+                    ]
+                },
+                "agent": {
+                    "type": "string"
+                },
+                "tool": {
+                    "type": "string"
+                },
+                "subflow": {
+                    "type": "string"
+                },
+                "input_map": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "output_map": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "condition": {
+                    "type": "string"
+                },
+                "branches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "when": {
+                                "type": "string"
+                            },
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "$ref": "#/$definitions/flowStep"
+                                }
+                            }
+                        }
+                    }
+                },
+                "parallel": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$definitions/flowStep"
+                    }
+                },
+                "retry": {
+                    "type": "object",
+                    "properties": {
+                        "max_retries": {
+                            "type": "number"
+                        },
+                        "backoff": {
+                            "type": "string",
+                            "enum": [
+                                "none",
+                                "linear",
+                                "exponential"
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "errorBoundary": {
+            "type": "object",
+            "properties": {
+                "on_error": {
+                    "type": "string",
+                    "enum": [
+                        "retry",
+                        "skip",
+                        "stop",
+                        "handler"
+                    ]
+                },
+                "handler_flow": {
+                    "type": "string"
+                }
+            }
+        },
+        "permission": {
+            "type": "object",
+            "required": [
+                "resource",
+                "action"
+            ],
+            "properties": {
+                "resource": {
+                    "type": "string"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "read",
+                        "write",
+                        "execute",
+                        "admin"
+                    ]
+                }
+            }
+        },
+        "capability": {
+            "type": "object",
+            "required": [
+                "id",
+                "description"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "params": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        }
+    }
+}

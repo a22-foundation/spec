@@ -1,207 +1,363 @@
-# A22 Language Specification v0.1
+# A22 Specification v0.1 (Foundational Draft)
 
-## 1. Introduction
-A22 is a declarative, agent-native language for defining agentic systems. It separates the **definition** of agent behavior from its **execution**, ensuring portability, determinism, and a clear mental model for builders.
+**Status:** Draft
+**License:** Apache 2.0
+**Audience:** Runtime implementers, language tooling developers, contributors
+**Goal:** Define the syntax, semantics, structures, and expectations of the A22 declarative agent language.
 
-## 2. Core Concepts
+---
 
-### 2.1 Capability vs Resource Model
-A22 distinguishes between **Capabilities** (what an agent *can do*) and **Resources** (what an agent *has access to*).
+## 0. Design Principles
 
-*   **Capabilities (Tools)**: Immutable, stateless functions or skills.
-    *   *Example*: `web_search`, `calculator`, `send_email`.
-    *   Defined once, reused across agents.
-*   **Resources (Memory/State)**: Mutable, stateful entities.
-    *   *Example*: `conversation_history`, `user_profile_db`, `file_system`.
-    *   Agents read from and write to resources.
-*   **Agents**: The actors that bind capabilities and resources to a model and a directive (system prompt).
+A22 is built around the following principles:
 
-### 2.2 Execution Graph (ADG)
-An A22 system compiles down to an **Acyclic Directed Graph (ADG)**.
-*   **Nodes**: Agents, Routers, Tools.
-*   **Edges**: Event flows (Message passing).
-*   **Execution**:
-    1.  **Trigger**: An event enters the graph.
-    2.  **Flow**: Data flows through routes to agents.
-    3.  **Step**: An agent executes (Model + Tools + Memory).
-    4.  **Output**: Result flows to the next node or final output.
+1.  **Declarative First**
+    A22 describes *what* the agentic system is, not *how* it executes.
+2.  **Composable Blocks**
+    Everything is defined through reusable blocks: agents, tools, data, events, workflows.
+3.  **Capability-Oriented**
+    Agents declare capabilities, and runtimes supply implementations.
+4.  **Stable, Minimal, Predictable**
+    Small surface area, predictable evolution, conservative changes.
+5.  **Portable and Vendor-Neutral**
+    Any runtime should be able to execute a compliant A22 program.
 
-## 3. Syntax & Grammar
+---
 
-A22 uses a HCL-like syntax optimized for readability.
+## 1. File Structure
 
-```ebnf
-config      = { block }
-block       = type identifier [ label ] "{" body "}"
-body        = { attribute | block }
-attribute   = key "=" expression
-expression  = literal | reference | list | map | call
-```
+### 1.1 A22 Files
+*   The default extension is `.a22`.
+*   A22 files contain a sequence of declarations, each defining one block.
 
-### 3.1 Blocks
-Top-level structures that define system components.
-*   `agent`: Defines an actor.
-*   `tool`: Defines a capability.
-*   `resource`: Defines a stateful backend (Memory).
-*   `input` / `output`: Defines the interface.
-*   `router`: Defines control flow logic.
+### 1.2 Valid Blocks
 
-### 3.2 Types
-*   `string`: "hello"
-*   `number`: 42, 3.14
-*   `bool`: true, false
-*   `list`: ["a", "b"]
-*   `map`: { key = "val" }
-*   `ref`: agent.name, tool.search
+A22 v1.0 defines the following blocks:
+*   `agent`
+*   `capability`
+*   `tool`
+*   `event`
+*   `workflow`
+*   `data` (schema definition)
+*   `config` (optional metadata)
 
-## 4. Block Definitions
+Blocks can appear in any order.
 
-### 4.1 Tool (Capability)
-Defines a functional capability.
+---
+
+## 2. Syntax Overview
+
+A22 uses a Terraform-style declarative syntax with:
+*   Double-quoted identifiers for named resources
+*   Curly-brace block structure
+*   HCL-like expressions (strings, booleans, numbers, arrays, objects)
+
+### 2.1 Example
 
 ```a22
-tool "web_search" {
-  description = "Search the internet for up-to-date information"
-  
-  # Implementation reference (URI or path)
-  source = "std/web_search"
+agent "support_bot" {
+    capabilities = ["memory", "retrieval"]
 
-  inputs {
-    query = string
-  }
-  outputs {
-    results = list(string)
-  }
+    on event "user_message" {
+        use tool "embedder"
+        call workflow "answer_user"
+    }
 }
 ```
 
-### 4.2 Resource (Memory)
-Defines a storage backend.
+---
+
+## 3. Core Blocks
+
+---
+
+### 3.1 AGENT Block
+
+Defines an autonomous or semi-autonomous agent.
+
+**Syntax**
 
 ```a22
-resource "chat_history" {
-  type = "vector_store"
-  provider = "pinecone" # or "local", "postgres"
-  ttl = "24h"
+agent "<name>" {
+    capabilities = [ ... ]
+    state        = data.<schema>?   // optional
+    model        = "<model-id>"?    // optional (runtime-dependent)
+
+    on event "<event-name>" {
+        call workflow "<workflow-name>"?
+        use tool "<tool-name>"?
+    }
 }
 ```
 
-### 4.3 Agent
-Binds Model, Tools, and Resources.
+**Fields**
+
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `capabilities` | `array(string)` | Yes | Declares required capabilities |
+| `state` | `reference` | No | Data schema attached to agent memory |
+| `model` | `string` | No | Preferred model; runtime may override |
+| `on event` | `block` | No | Event handler |
+
+**Semantics**
+*   Agents do nothing unless triggered by events or workflows.
+*   Capabilities must be supplied by runtime or bound at execution time.
+*   Events are resolved by name and passed to handlers.
+
+---
+
+### 3.2 CAPABILITY Block
+
+Defines an abstract capability an agent may require.
+
+**Syntax**
 
 ```a22
-agent "researcher" {
-  model = "gpt-4-turbo"
-  
-  system_prompt = <<EOF
-    You are a researcher. Use the web_search tool to find information.
-    Always cite your sources.
-  EOF
-
-  # Capabilities
-  use "web_search" {
-    tool = tool.web_search
-  }
-
-  # Resources
-  memory "short_term" {
-    resource = resource.chat_history
-    mode = "read_write"
-  }
+capability "retrieval" {
+    inputs  = ["query"]
+    outputs = ["docs"]
+    kind    = "external" | "system" | "builtin"
 }
 ```
 
-### 4.4 Router (Control Flow)
-Directs traffic based on logic.
+Capabilities are contracts only; implementations are runtime-specific.
+
+---
+
+### 3.3 TOOL Block
+
+Represents a callable function, API, or external executor.
+
+**Syntax**
 
 ```a22
-router "triage" {
-  entry = true # Entry point of the graph
-
-  route {
-    if = contains(input.text, "help")
-    to = agent.support
-  }
-
-  route {
-    default = true
-    to = agent.researcher
-  }
+tool "<name>" {
+    schema {
+        field1: string
+        field2: number
+        field3: array<string>
+    }
+    handler = external("<binding>")
 }
 ```
 
-## 5. Semantics
+**Semantics**
+*   Tools are side-effecting operations.
+*   Runtime determines actual function binding (cloud, local, API, etc).
 
-### 5.1 Scoping & Visibility
-*   Global Scope: All top-level blocks are visible to each other.
-*   Agent Scope: Tools and Resources defined/linked inside an agent are only accessible to that agent.
+---
+
+### 3.4 EVENT Block
+
+Defines an event that can be emitted or listened for.
+
+**Syntax**
+
+```a22
+event "user_message" {
+    payload = data.UserMessage
+}
+```
+
+---
+
+### 3.5 WORKFLOW Block
+
+Workflows orchestrate steps, tools, and agent calls.
+
+**Syntax**
+
+```a22
+workflow "answer_user" {
+    steps {
+        embed  = tool "embedder" { text = input.text }
+        search = capability "retrieval" { query = embed.vector }
+        reply  = agent "support_bot" { context = search.docs }
+    }
+    returns = data.Answer
+}
+```
+
+**Execution Semantics**
+*   Steps run in order unless `parallel` keyword is used.
+*   Steps reference tools, agents, or capabilities.
+*   Workflows can emit events.
+
+---
+
+### 3.6 DATA Block
+
+Defines structured data schemas.
+
+**Syntax**
+
+```a22
+data Answer {
+    text: string
+    confidence: number
+}
+```
+
+Supported primitive types:
+*   `string`
+*   `number`
+*   `boolean`
+*   `array<T>`
+*   `object { ... }`
+
+---
+
+## 4. Expressions & Values
+
+A22 supports:
+*   Strings: `"hello"`
+*   Numbers: `42`, `3.14`
+*   Booleans: `true`, `false`
+*   Arrays: `[1, 2, 3]`
+*   Objects:
+
+```a22
+{
+    a = 1
+    b = true
+}
+```
+
+No custom functions or expressions allowed v1.0 — keeps language pure & deterministic.
+
+---
+
+## 5. Execution Model
+
+### 5.1 Runtime Responsibilities
+
+A runtime MUST:
+1.  Parse & validate A22 files
+2.  Resolve capabilities
+3.  Bind tools to handlers
+4.  Execute workflows in deterministic order
+5.  Maintain agent state if defined
+6.  Enforce sandboxing & security boundaries
+7.  Support event dispatch & routing
 
 ### 5.2 Determinism
-*   **Static Graph**: The structure of the graph (nodes and edges) is constant at compile time.
-*   **Dynamic Execution**: The path taken *through* the graph depends on runtime data, but the *possible* paths are fixed.
+*   Workflow step ordering is deterministic.
+*   Tools may be nondeterministic; A22 does not impose constraints.
 
-## 6. AST Structure
+### 5.3 Error Handling
 
-The Abstract Syntax Tree represents the parsed configuration.
+Runtimes must:
+*   Surface schema validation errors
+*   Surface missing capability binding errors
+*   Provide structured error messages
 
-```typescript
-// Root
-interface Program {
-  kind: "Program";
-  blocks: Block[];
+---
+
+## 6. AST & IR Requirements
+
+A22 languages must translate to a canonical IR containing:
+*   Block types + names
+*   Field bodies
+*   Data schemas
+*   Workflow step graph
+*   Event routing table
+*   Capability contract requirements
+
+Runtimes must accept this IR structure.
+
+AST structure is implementation-specific, but must be lossy of no data.
+
+---
+
+## 7. Validation Rules
+
+A22 v1.0 requires the following validation:
+*   Agents must reference valid events + workflows
+*   Tools must reference valid schemas
+*   Data schemas must be acyclic
+*   Workflow steps must reference defined entities
+*   Capabilities must match invocation shapes
+*   No duplicate block names of same type
+*   No undeclared identifiers
+
+---
+
+## 8. Versioning
+
+A22 follows semantic versioning:
+*   `0.x` = not yet stable
+*   `1.x` = stable language
+*   `2.x` = potential breaking syntax changes
+
+Backward compatibility is required unless otherwise stated.
+
+---
+
+## 9. Reserved Keywords (v1.0)
+
+*   `agent`
+*   `tool`
+*   `capability`
+*   `workflow`
+*   `event`
+*   `data`
+*   `config`
+*   `steps`
+*   `schema`
+*   `handler`
+*   `external`
+*   `on`
+*   `parallel`
+*   `returns`
+*   `input`
+
+---
+
+## 10. Security & Isolation
+
+A22 itself is declarative; runtimes must enforce:
+*   capability-level isolation
+*   tool sandboxing
+*   per-agent memory boundaries
+*   event permission rules
+
+A22 does not define execution locality (cloud, local, edge).
+
+---
+
+## 11. Minimal Example
+
+```a22
+data Question {
+    text: string
 }
 
-// Generic Block
-interface Block {
-  kind: "Block";
-  type: string;       // "agent", "tool", "resource"
-  identifier: string; // "researcher"
-  label?: string;     // Optional secondary label
-  attributes: Attribute[];
-  children: Block[];  // Nested blocks
+data Answer {
+    text: string
 }
 
-// Attribute
-interface Attribute {
-  kind: "Attribute";
-  key: string;
-  value: Expression;
+event "user_question" {
+    payload = data.Question
 }
 
-// Expressions
-type Expression = 
-  | Literal 
-  | Reference 
-  | ListExpr 
-  | MapExpr;
-
-interface Reference {
-  kind: "Reference";
-  path: string[]; // ["tool", "web_search"]
+tool "generate_answer" {
+    schema {
+        prompt: string
+    }
+    handler = external("model.generate")
 }
-```
 
-## 7. JSON IR (Intermediate Representation)
-The compiler transpiles A22 code into a portable JSON format for runtimes.
+workflow "qa" {
+    steps {
+        answer = tool "generate_answer" { prompt = input.text }
+    }
+    returns = data.Answer
+}
 
-```json
-{
-  "version": "0.1",
-  "graph": {
-    "nodes": {
-      "agent.researcher": {
-        "type": "agent",
-        "model": "gpt-4-turbo",
-        "tools": ["tool.web_search"]
-      },
-      "tool.web_search": {
-        "type": "tool",
-        "source": "std/web_search"
-      }
-    },
-    "edges": [
-      { "from": "router.triage", "to": "agent.researcher" }
-    ]
-  }
+agent "qa_bot" {
+    capabilities = []
+    on event "user_question" {
+        call workflow "qa"
+    }
 }
 ```
