@@ -1,391 +1,594 @@
-# A22 Grammar (EBNF) — v1.0
+# A22 Grammar Specification v0.1
 
-## 1. Top-Level Structure
+**Indentation-Based, Natural Language Syntax**
 
-```ebnf
-a22_file     ::= declaration*
+---
+
+## 1. Lexical Elements
+
+### 1.1 Tokens
+
+```
+KEYWORD      ::= 'agent' | 'tool' | 'workflow' | 'policy' | 'provider'
+               | 'can' | 'use' | 'do' | 'has' | 'is' | 'when' | 'needs'
+               | 'steps' | 'parallel' | 'branch' | 'loop' | 'return'
+               | 'import' | 'from' | 'test' | 'given' | 'expect'
+               | 'schedule' | 'every' | 'at' | 'in' | 'run'
+               | 'human_in_loop' | 'show' | 'ask' | 'options'
+               | 'state' | 'prompt' | 'validates' | 'sandbox'
+               | 'auth' | 'config' | 'limits' | 'allow' | 'deny'
+
+IDENT        ::= [a-zA-Z_][a-zA-Z0-9_]*
+SYMBOL       ::= ':' [a-zA-Z_][a-zA-Z0-9_]*
+REFERENCE    ::= '.' [a-zA-Z_][a-zA-Z0-9_]*
+TAG          ::= '@' [a-zA-Z_][a-zA-Z0-9_]*
+
+STRING       ::= '"' [^"]* '"'
+NUMBER       ::= [0-9]+ ('.' [0-9]+)?
+BOOLEAN      ::= 'true' | 'false'
+
+ARROW        ::= '->'
+RANGE        ::= '..'
+COMMA        ::= ','
+COLON        ::= ':'
+
+INDENT       ::= <increase indentation>
+DEDENT       ::= <decrease indentation>
+NEWLINE      ::= '\n'
+```
+
+### 1.2 Comments
+
+```
+COMMENT      ::= '#' [^\n]* '\n'
+```
+
+---
+
+## 2. Program Structure
+
+### 2.1 Top Level
+
+```
+program      ::= (declaration NEWLINE*)*
+
 declaration  ::= agent_decl
                | tool_decl
-               | capability_decl
                | workflow_decl
-               | event_decl
-               | data_decl
-               | config_decl
-               | provider_decl
                | policy_decl
-               | template_decl
+               | provider_decl
+               | schedule_decl
+               | test_decl
+               | import_decl
+               | prompt_decl
+               | capability_decl
 ```
 
 ---
 
-## 2. Lexical Elements
+## 3. Agent Declaration
 
-### 2.1 Identifiers
+```
+agent_decl   ::= 'agent' STRING NEWLINE INDENT agent_body DEDENT
 
-```ebnf
-IDENT        ::= QUOTED_STRING
-QUOTED_STRING ::= '"' (CHAR_NO_QUOTE)* '"'
-CHAR_NO_QUOTE ::= /* any Unicode char except " */
+agent_body   ::= (agent_stmt NEWLINE)*
+
+agent_stmt   ::= can_stmt
+               | use_stmt
+               | do_stmt
+               | has_stmt
+               | when_stmt
+               | prompt_stmt
+               | state_stmt
+               | remembers_stmt
+               | isolation_stmt
 ```
 
-A22 requires double-quoted identifiers for clarity.
+### 3.1 Agent Statements
 
-### 2.2 Literals
+```
+can_stmt     ::= 'can' capability_list
 
-```ebnf
-string_lit   ::= QUOTED_STRING
-number_lit   ::= DIGITS ('.' DIGITS)?
-boolean_lit  ::= 'true' | 'false'
+capability_list ::= IDENT (',' IDENT)*
 
-DIGITS       ::= [0-9]+
+use_stmt     ::= 'use' (simple_use | model_use | tool_use)
+
+simple_use   ::= IDENT (use_options)?
+
+model_use    ::= 'model' ( COLON SYMBOL | NEWLINE INDENT model_config DEDENT )
+
+tool_use     ::= IDENT NEWLINE INDENT tool_options DEDENT
+
+do_stmt      ::= 'do' REFERENCE (when_clause)?
+
+has_stmt     ::= 'has' (property_list | property_block)
+
+property_list ::= IDENT COLON value (',' IDENT COLON value)*
+
+property_block ::= NEWLINE INDENT (IDENT COLON value NEWLINE)* DEDENT
+
+when_stmt    ::= 'when' condition NEWLINE INDENT action DEDENT
 ```
 
-### 2.3 Values
+### 3.2 Model Configuration
 
-```ebnf
-value        ::= string_lit
-               | number_lit
-               | boolean_lit
-               | array_lit
-               | object_lit
-               | reference
+```
+model_config ::= (model_option NEWLINE)*
 
-array_lit    ::= '[' (value (',' value)*)? ']'
+model_option ::= 'primary' model_spec
+               | 'fallback' list_of_models
+               | 'strategy' SYMBOL
+               | 'params' NEWLINE INDENT params_block DEDENT
 
-object_lit   ::= '{' (object_field)* '}'
-object_field ::= IDENT '=' value
+model_spec   ::= SYMBOL 'from' SYMBOL
+
+list_of_models ::= '[' model_spec (',' model_spec)* ']'
 ```
 
-### 2.4 References
+### 3.3 State Configuration
 
-```ebnf
-reference    ::= IDENT ('.' IDENT)*
+```
+state_stmt   ::= 'state' SYMBOL NEWLINE INDENT state_options DEDENT
+
+state_options ::= (state_option NEWLINE)*
+
+state_option  ::= 'backend' SYMBOL
+                | 'ttl' duration
+                | 'persist_to' SYMBOL
+
+remembers_stmt ::= 'remembers' NEWLINE INDENT remember_items DEDENT
+
+remember_items ::= (remember_item NEWLINE)*
+
+remember_item  ::= IDENT COLON remember_spec
+
+remember_spec  ::= 'last' NUMBER IDENT
+                 | 'always'
+                 | 'current_session'
 ```
 
-Examples:
-*   `data.UserMessage`
-*   `tool.embedder`
+### 3.4 Isolation Configuration
 
----
-
-## 3. Blocks
-
-### 3.1 Agent Block
-
-```ebnf
-agent_decl ::= 'agent' IDENT '{' agent_body '}'
-
-agent_body ::= ( agent_field
-               | event_handler_block
-               | model_block
-               | policy_block
-               | isolation_block
-               )*
-
-agent_field ::= 'capabilities' '=' array_lit
-               | 'state' '=' reference
-               | 'model' '=' (string_lit | reference)
-               | 'policy' '=' reference
-               | 'system_prompt' '=' string_lit
-               | 'prompt_template' '=' reference
-
-# Advanced model configuration
-model_block ::= 'model' '{' model_config '}'
-
-model_config ::= ( 'primary' '=' model_provider_config
-                 | 'fallback' '=' array_of_provider_configs
-                 | 'strategy' '=' strategy_value
-                 )*
-
-model_provider_config ::= '{'
-                            'provider' '=' reference ','
-                            'name' '=' string_lit ','?
-                            ('params' '{' param_field* '}')?
-                          '}'
-
-array_of_provider_configs ::= '[' (model_provider_config (',' model_provider_config)*)? ']'
-
-strategy_value ::= 'failover' | 'cost_optimized' | 'latency_optimized'
-                 | 'capability_based' | 'round_robin'
-
-param_field ::= IDENT '=' value
-
-# Inline policy block
-policy_block ::= 'policy' '{' policy_body '}'
-
-# Isolation block
-isolation_block ::= 'isolation' '{' isolation_field* '}'
-
-isolation_field ::= 'memory' '=' isolation_level
-                  | 'network' '=' isolation_level
-                  | 'filesystem' '=' filesystem_level
-
-isolation_level ::= 'strict' | 'shared' | 'none'
-filesystem_level ::= 'full' | 'readonly' | 'none'
-
-# Event handlers
-event_handler_block ::= 'on' 'event' IDENT '{' event_handler_body '}'
-
-event_handler_body ::= (workflow_call | tool_call)*
-
-workflow_call ::= 'call' 'workflow' IDENT
-tool_call      ::= 'use'  'tool'      IDENT
 ```
+isolation_stmt ::= 'isolation' NEWLINE INDENT isolation_options DEDENT
 
-### 3.2 Capability Block
+isolation_options ::= (isolation_option NEWLINE)*
 
-```ebnf
-capability_decl ::= 'capability' IDENT '{' capability_body '}'
-
-capability_body ::= capability_field*
-
-capability_field ::= 'kind' '=' capability_kind
-                   | 'description' '=' string_lit
-                   | requires_block
-                   | grants_block
-
-capability_kind ::= 'external' | 'system' | 'builtin'
-
-requires_block ::= 'requires' '{' requires_field* '}'
-
-requires_field ::= 'permissions' '=' array_of_permissions
-
-array_of_permissions ::= '[' (permission_object (',' permission_object)*)? ']'
-
-permission_object ::= '{'
-                        'resource' '=' string_lit ','
-                        'action' '=' permission_action
-                      '}'
-
-permission_action ::= 'read' | 'write' | 'execute' | 'admin'
-
-grants_block ::= 'grants' '{' grants_field* '}'
-
-grants_field ::= 'tools' '=' array_lit
-               | 'workflows' '=' array_lit
-               | 'data' '=' array_lit
-```
-
-### 3.3 Tool Block
-
-```ebnf
-tool_decl ::= 'tool' IDENT '{' tool_body '}'
-
-tool_body ::= (schema_block | handler_field | security_block)*
-
-schema_block ::= 'schema' '{' schema_field* '}'
-schema_field ::= IDENT ':' type_ref
-
-handler_field ::= 'handler' '=' external_handler
-
-external_handler ::= 'external' '(' string_lit ')'
-
-security_block ::= 'security' '{' security_field* '}'
-
-security_field ::= validate_block
-                 | sandbox_block
-                 | output_block
-
-validate_block ::= 'validate' '{' validate_field* '}'
-
-validate_field ::= IDENT '=' '{' validation_rule* '}'
-
-validation_rule ::= 'max_length' '=' number_lit
-                  | 'min_length' '=' number_lit
-                  | 'pattern' '=' string_lit
-                  | 'deny_patterns' '=' array_lit
-                  | 'min' '=' number_lit
-                  | 'max' '=' number_lit
-
-sandbox_block ::= 'sandbox' '{' sandbox_field* '}'
-
-sandbox_field ::= 'timeout_ms' '=' number_lit
-                | 'max_memory_mb' '=' number_lit
-                | 'network_allowed' '=' boolean_lit
-                | 'network_hosts' '=' array_lit
-                | 'filesystem_allowed' '=' boolean_lit
-                | 'filesystem_paths' '=' array_lit
-                | 'filesystem_mode' '=' filesystem_mode
-
-filesystem_mode ::= 'readonly' | 'readwrite'
-
-output_block ::= 'output' '{' output_field* '}'
-
-output_field ::= 'max_size_kb' '=' number_lit
-               | 'schema' '=' reference
-```
-
-### 3.4 Event Block
-
-```ebnf
-event_decl ::= 'event' IDENT '{' event_body '}'
-
-event_body ::= 'payload' '=' reference
-```
-
-### 3.5 Workflow Block
-
-```ebnf
-workflow_decl ::= 'workflow' IDENT '{' workflow_body '}'
-
-workflow_body ::= steps_block
-                | steps_block returns_field
-
-steps_block ::= 'steps' '{' step_decl* '}'
-
-step_decl ::= IDENT '=' step_invocation
-
-step_invocation ::= tool_invocation
-                  | capability_invocation
-                  | agent_invocation
-
-tool_invocation       ::= 'tool'      IDENT invocation_args
-capability_invocation ::= 'capability' IDENT invocation_args
-agent_invocation      ::= 'agent'     IDENT invocation_args
-
-invocation_args ::= '{' invocation_field* '}'
-invocation_field ::= IDENT '=' value
-
-returns_field ::= 'returns' '=' reference
-```
-
-### 3.6 Data Block
-
-```ebnf
-data_decl ::= 'data' IDENT '{' data_field* '}'
-
-data_field ::= IDENT ':' type_ref
-```
-
-### 3.7 Type References
-
-```ebnf
-type_ref ::= primitive_type
-           | array_type
-           | object_type
-           | reference       // data.SomeType
-
-primitive_type ::= 'string'
-                 | 'number'
-                 | 'boolean'
-
-array_type ::= 'array' '<' type_ref '>'
-
-object_type ::= 'object' '{' data_field* '}'
-```
-
-### 3.8 Config Block
-
-```ebnf
-config_decl ::= 'config' IDENT '{' config_body '}'
-
-config_body ::= (config_field | config_nested_block)*
-
-config_field ::= IDENT '=' value
-
-config_nested_block ::= IDENT '{' config_field* '}'
+isolation_option ::= 'memory' COLON IDENT
+                   | 'network' COLON IDENT
+                   | 'filesystem' COLON IDENT
 ```
 
 ---
 
-### 3.9 Provider Block
+## 4. Tool Declaration
 
-```ebnf
-provider_decl ::= 'provider' IDENT '{' provider_body '}'
+```
+tool_decl    ::= 'tool' STRING NEWLINE INDENT tool_body DEDENT
 
-provider_body ::= provider_field*
+tool_body    ::= (tool_stmt NEWLINE)*
 
-provider_field ::= 'type' '=' provider_type
-                 | 'credentials' '=' (credential_ref | credentials_block)
-                 | config_nested_block
-                 | limits_block
+tool_stmt    ::= 'endpoint' STRING
+               | 'runtime' SYMBOL
+               | auth_stmt
+               | input_stmt
+               | output_stmt
+               | validates_stmt
+               | sandbox_stmt
+```
 
-provider_type ::= 'llm' | 'embedding' | 'vision' | 'audio'
+### 4.1 Tool Statements
 
-credential_ref ::= env_ref | secrets_ref
+```
+auth_stmt    ::= 'auth' env_ref
 
-env_ref ::= 'env' '.' IDENT
+env_ref      ::= 'env.' IDENT
 
-secrets_ref ::= 'secrets' '.' IDENT
+input_stmt   ::= 'input' NEWLINE INDENT input_fields DEDENT
 
-credentials_block ::= '{' credential_field* '}'
+input_fields ::= (field_decl NEWLINE)*
 
-credential_field ::= IDENT '=' credential_ref
+field_decl   ::= IDENT COLON type_spec
 
-limits_block ::= 'limits' '{' limit_field* '}'
+type_spec    ::= 'text' | 'number' | 'boolean' | 'list' | 'map' | 'any'
+               | 'optional' type_spec
 
-limit_field ::= 'requests_per_minute' '=' number_lit
-              | 'tokens_per_minute' '=' number_lit
-              | 'requests_per_day' '=' number_lit
+output_stmt  ::= 'output' NEWLINE INDENT output_fields DEDENT
+
+validates_stmt ::= 'validates' NEWLINE INDENT validation_rules DEDENT
+
+validation_rules ::= (validation_rule NEWLINE)*
+
+validation_rule ::= IDENT ('.' IDENT)* COLON (value | comparison)
+
+sandbox_stmt ::= 'sandbox' NEWLINE INDENT sandbox_options DEDENT
+
+sandbox_options ::= (sandbox_option NEWLINE)*
+
+sandbox_option ::= 'timeout' COLON duration
+                 | 'memory' COLON size
+                 | 'network' COLON network_spec
+                 | 'filesystem' COLON filesystem_spec
 ```
 
 ---
 
-### 3.10 Policy Block
+## 5. Workflow Declaration
 
-```ebnf
-policy_decl ::= 'policy' IDENT '{' policy_body '}'
+```
+workflow_decl ::= 'workflow' STRING NEWLINE INDENT workflow_body DEDENT
 
-policy_body ::= (allow_block | deny_block | limits_block)*
+workflow_body ::= (workflow_stmt NEWLINE)*
 
-allow_block ::= 'allow' '{' allow_field* '}'
+workflow_stmt ::= state_stmt
+                | steps_stmt
+                | parallel_stmt
+                | on_failure_stmt
+```
 
-allow_field ::= 'tools' '=' array_lit
-              | 'workflows' '=' array_lit
-              | 'data' '=' array_lit
-              | 'capabilities' '=' array_lit
+### 5.1 Steps
 
-deny_block ::= 'deny' '{' deny_field* '}'
+```
+steps_stmt   ::= 'steps' NEWLINE INDENT step_list DEDENT
 
-deny_field ::= 'tools' '=' array_lit
-             | 'workflows' '=' array_lit
-             | 'data' '=' array_lit
+step_list    ::= (step NEWLINE)*
 
-limits_block ::= 'limits' '{' limit_field* '}'
+step         ::= IDENT '=' step_expr
+               | parallel_stmt
+               | branch_stmt
+               | loop_stmt
+               | return_stmt
+               | when_stmt
 
-limit_field ::= 'max_memory_mb' '=' number_lit
-              | 'max_execution_time' '=' number_lit
-              | 'max_tool_calls' '=' number_lit
-              | 'max_workflow_depth' '=' number_lit
+step_expr    ::= call_expr
+               | agent_call
+               | tool_call
+```
+
+### 5.2 Parallel Execution
+
+```
+parallel_stmt ::= 'parallel' NEWLINE INDENT parallel_steps DEDENT
+
+parallel_steps ::= (parallel_step NEWLINE)*
+
+parallel_step  ::= IDENT '=' call_expr
+```
+
+### 5.3 Branching
+
+```
+branch_stmt  ::= 'branch' expr NEWLINE INDENT branch_cases DEDENT
+
+branch_cases ::= (branch_case NEWLINE)*
+
+branch_case  ::= 'when' condition ARROW action
+```
+
+### 5.4 Loops
+
+```
+loop_stmt    ::= 'loop' loop_options NEWLINE INDENT loop_body DEDENT
+
+loop_options ::= 'max' COLON NUMBER
+
+loop_body    ::= (loop_item NEWLINE)*
+
+loop_item    ::= step
+               | 'when' condition NEWLINE INDENT ARROW 'break' DEDENT
+```
+
+### 5.5 Return
+
+```
+return_stmt  ::= 'return' expr
 ```
 
 ---
 
-### 3.11 Template Block
+## 6. Human-in-the-Loop
 
-```ebnf
-template_decl ::= 'template' IDENT '{' template_body '}'
+```
+human_in_loop_decl ::= 'human_in_loop' STRING NEWLINE INDENT hil_body DEDENT
 
-template_body ::= template_field*
+hil_body     ::= (hil_stmt NEWLINE)*
 
-template_field ::= 'system' '=' string_lit
-                 | 'user_prefix' '=' string_lit
-                 | 'user_suffix' '=' string_lit
-                 | 'format' '=' string_lit
+hil_stmt     ::= 'show' expr
+               | 'ask' STRING
+               | 'options' list
+               | 'timeout' duration
+               | 'default' SYMBOL
+               | 'input' 'type' COLON SYMBOL
+               | 'optional' COLON BOOLEAN
+               | 'stores_in' COLON expr
 ```
 
 ---
 
-## 4. Comments
+## 7. Policy Declaration
 
-```ebnf
-comment ::= '//' (any char until newline)
+```
+policy_decl  ::= 'policy' SYMBOL NEWLINE INDENT policy_body DEDENT
+
+policy_body  ::= (policy_stmt NEWLINE)*
+
+policy_stmt  ::= allow_stmt
+               | deny_stmt
+               | limits_stmt
+
+allow_stmt   ::= 'allow' NEWLINE INDENT allow_items DEDENT
+
+allow_items  ::= (allow_item NEWLINE)*
+
+allow_item   ::= 'tools' list
+               | 'data' list
+               | 'capabilities' list
+
+deny_stmt    ::= 'deny' NEWLINE INDENT deny_items DEDENT
+
+deny_items   ::= (deny_item NEWLINE)*
+
+deny_item    ::= 'tools' list
+               | 'data' list
+
+limits_stmt  ::= 'limits' NEWLINE INDENT limit_items DEDENT
+
+limit_items  ::= (limit_item NEWLINE)*
+
+limit_item   ::= IDENT COLON (NUMBER | STRING)
 ```
 
 ---
 
-## 5. Whitespace
+## 8. Provider Declaration
 
-Whitespace is ignored except inside quoted strings.
+```
+provider_decl ::= 'provider' SYMBOL NEWLINE INDENT provider_body DEDENT
 
-```ebnf
-WS ::= (' ' | '\t' | '\n' | '\r')+
+provider_body ::= (provider_stmt NEWLINE)*
+
+provider_stmt ::= 'type' SYMBOL
+                | auth_stmt
+                | config_stmt
+                | limits_stmt
+
+config_stmt   ::= 'config' NEWLINE INDENT config_items DEDENT
+
+config_items  ::= (config_item NEWLINE)*
+
+config_item   ::= IDENT (STRING | NUMBER | SYMBOL)
 ```
 
 ---
 
-## 6. Grammar Validity Summary
-*   Deterministic: yes
-*   LALR(1) compatible: yes
-*   No left recursion
-*   Fully parseable by ANTLR, Tree-sitter, PEG, Recursive Descent
+## 9. Schedule Declaration
+
+```
+schedule_decl ::= 'schedule' STRING NEWLINE INDENT schedule_body DEDENT
+
+schedule_body ::= (schedule_stmt NEWLINE)*
+
+schedule_stmt ::= every_stmt
+                | run_stmt
+                | with_stmt
+
+every_stmt    ::= 'every' (time_spec | duration)
+
+time_spec     ::= IDENT 'at' STRING 'in' STRING
+
+run_stmt      ::= 'run' (IDENT '.' IDENT)
+
+with_stmt     ::= 'with' IDENT COLON value
+```
+
+---
+
+## 10. Test Declaration
+
+```
+test_decl    ::= 'test' STRING NEWLINE INDENT test_body DEDENT
+
+test_body    ::= (test_stmt NEWLINE)*
+
+test_stmt    ::= given_stmt
+               | when_stmt
+               | expect_stmt
+
+given_stmt   ::= 'given' NEWLINE INDENT given_items DEDENT
+
+given_items  ::= (given_item NEWLINE)*
+
+given_item   ::= IDENT SYMBOL
+               | 'input' value
+               | IDENT 'is_mock'
+
+expect_stmt  ::= 'expect' NEWLINE INDENT expect_items DEDENT
+
+expect_items ::= (expect_item NEWLINE)*
+
+expect_item  ::= expr comparison expr
+               | expr ('contains' | 'is') expr
+               | 'calls' IDENT (NUMBER | 'once')
+               | 'returns' IDENT
+               | 'completes' 'within' duration
+```
+
+---
+
+## 11. Import Declaration
+
+```
+import_decl  ::= 'import' NEWLINE INDENT import_items DEDENT
+               | 'import' import_item
+
+import_items ::= (import_item NEWLINE)*
+
+import_item  ::= IDENT 'from' STRING
+               | SYMBOL (',' SYMBOL)* 'from' STRING
+               | 'agent' STRING
+               | 'tool' STRING
+```
+
+---
+
+## 12. Prompt Declaration
+
+```
+prompt_decl  ::= 'prompt' (STRING | SYMBOL) NEWLINE INDENT prompt_body DEDENT
+
+prompt_body  ::= STRING
+               | conditional_prompts
+
+conditional_prompts ::= (conditional_prompt NEWLINE)*
+
+conditional_prompt ::= 'when' condition NEWLINE INDENT ARROW STRING DEDENT
+```
+
+---
+
+## 13. Expressions and Values
+
+```
+expr         ::= value
+               | IDENT
+               | IDENT '.' IDENT ('.' IDENT)*
+               | SYMBOL
+               | REFERENCE
+               | call_expr
+               | comparison
+               | list
+               | map
+
+value        ::= STRING
+               | NUMBER
+               | BOOLEAN
+               | SYMBOL
+               | list
+               | map
+
+list         ::= '[' (value (',' value)*)? ']'
+
+map          ::= '{' (map_entry (',' map_entry)*)? '}'
+
+map_entry    ::= IDENT COLON value
+
+call_expr    ::= IDENT (call_args)?
+
+call_args    ::= IDENT COLON value
+               | NEWLINE INDENT (arg_item NEWLINE)* DEDENT
+
+arg_item     ::= IDENT COLON value
+
+comparison   ::= expr ('==' | '!=' | '<' | '>' | '<=' | '>=') expr
+               | expr RANGE expr
+
+condition    ::= comparison
+               | expr
+               | IDENT '.' IDENT
+
+action       ::= ARROW (IDENT | call_expr | REFERENCE)
+```
+
+---
+
+## 14. Common Patterns
+
+```
+duration     ::= NUMBER ('s' | 'm' | 'h' | 'd')
+
+size         ::= NUMBER ('kb' | 'mb' | 'gb')
+
+network_spec ::= 'none' | 'limited' | 'full'
+               | 'limited' 'to' list
+
+filesystem_spec ::= 'none' | 'readonly' | 'full'
+                  | 'readonly' list
+```
+
+---
+
+## 15. Indentation Rules
+
+1. **Consistent Indentation**: Use either tabs OR 4 spaces (not mixed)
+2. **Block Scope**: INDENT starts a block, DEDENT ends it
+3. **Nested Blocks**: Each level adds one indent
+4. **Empty Lines**: Ignored (don't affect indentation)
+5. **Comments**: Don't affect indentation level
+
+---
+
+## 16. Example Parse Tree
+
+```a22
+agent "robin"
+	can chat, remember
+	use model: :gpt4
+```
+
+**Parse Tree:**
+```
+Program
+└─ AgentDeclaration
+   ├─ Name: "robin"
+   └─ Body
+      ├─ CanStatement
+      │  └─ Capabilities: [chat, remember]
+      └─ UseStatement
+         ├─ Target: model
+         └─ Value: Symbol(:gpt4)
+```
+
+---
+
+## 17. Parsing Strategy
+
+### Indentation-Sensitive Lexing
+
+The lexer must track indentation levels and emit INDENT/DEDENT tokens:
+
+1. **Track Column**: Monitor leading whitespace on each line
+2. **Indentation Stack**: Maintain stack of indentation levels
+3. **Emit INDENT**: When indentation increases
+4. **Emit DEDENT**: When indentation decreases (may emit multiple)
+5. **Ignore Blank Lines**: Empty lines don't change indentation context
+
+### Parser Implementation Notes
+
+- Use recursive descent parsing
+- Handle indentation via INDENT/DEDENT tokens
+- Maintain symbol table for references
+- Validate keyword usage during parse
+- Collect imports for later resolution
+
+---
+
+## 18. Reserved Word List
+
+All keywords are reserved and cannot be used as identifiers:
+
+```
+agent, tool, workflow, policy, provider, capability
+can, use, do, has, is, when, needs
+steps, parallel, branch, loop, break, continue, return
+import, from, namespace, export
+test, given, expect, show, ask
+schedule, every, at, in, run
+human_in_loop, options, timeout, default
+state, prompt, remembers, isolation
+validates, sandbox, auth, config, limits
+allow, deny, primary, fallback, strategy
+```
+
+---
+
+## 19. Error Recovery
+
+Parsers should provide helpful error messages for common mistakes:
+
+- Missing indentation
+- Inconsistent indentation (mixing tabs/spaces)
+- Invalid keyword placement
+- Missing required fields
+- Type mismatches
+- Invalid references
+- Circular dependencies

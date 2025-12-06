@@ -1,1420 +1,1081 @@
-# A22 Specification v0.1 (Foundational Draft)
+# A22 Specification v0.1
 
-**Status:** Draft
+**A Declarative Language for Functional, Immutable, Temporal Agent Systems**
+
+**Status:** Not Stable
 **License:** Apache 2.0
-**Audience:** Runtime implementers, language tooling developers, contributors
-**Goal:** Define the syntax, semantics, structures, and expectations of the A22 declarative agent language.
 
 ---
 
-## 0. Design Principles
+## 0. Overview
 
-A22 is built around the following principles:
+A22 is a natural-language inspired, indentation-based, functional, immutable, and temporal DSL for defining:
+- Agents
+- Tools
+- Workflows
+- Policies
+- Providers
+- Prompts
+- Schedules
+- State rules
+- Tests
 
-1.  **Declarative First**
-    A22 describes *what* the agentic system is, not *how* it executes.
-2.  **Composable Blocks**
-    Everything is defined through reusable blocks: agents, tools, data, events, workflows.
-3.  **Capability-Oriented**
-    Agents declare capabilities, and runtimes supply implementations.
-4.  **Stable, Minimal, Predictable**
-    Small surface area, predictable evolution, conservative changes.
-5.  **Portable and Vendor-Neutral**
-    Any runtime should be able to execute a compliant A22 program.
+A22 programs describe agentic systems as **dataflow graphs over time**, not imperative code.
 
 ---
 
-## 1. File Structure
+## 1. Core Semantic Model (Irreducible Primitives)
 
-### 1.1 A22 Files
-*   The default extension is `.a22`.
-*   A22 files contain a sequence of declarations, each defining one block.
+A22 has exactly **five semantic primitives**:
 
-### 1.2 Valid Blocks
+1. **Event**
+2. **Context**
+3. **Agent**
+4. **Workflow**
+5. **Tool**
 
-A22 defines the following blocks:
-*   `agent` - Autonomous agent definition
-*   `capability` - Abstract capability contract
-*   `tool` - Callable function or API
-*   `event` - Event definition
-*   `workflow` - Step orchestration
-*   `data` - Data schema definition
-*   `config` - Runtime configuration and metadata
-*   `provider` - Model provider configuration
-*   `policy` - Security policy definition
-*   `template` - Reusable prompt template
+All other constructs (state, policies, HIL, providers, schedules) are defined in terms of these.
 
-Blocks can appear in any order.
+---
+
+### 1.1 Event
+
+An event is the only thing that "happens" in A22:
+
+```
+event = {
+  type: symbol,
+  time: timestamp,
+  data: map
+}
+```
+
+- Events are **immutable**
+- All system changes produce events
+- Runtime appends events to context
+
+Examples of event types:
+- `message.incoming`
+- `tool.output`
+- `agent.output`
+- `workflow.step`
+- `hil.request`
+- `hil.response`
+- `policy.violation`
+- `schedule.tick`
+
+---
+
+### 1.2 Context
+
+Context is the entire **immutable history of events**:
+
+```
+context_t = [event_0, event_1, ..., event_t]
+```
+
+- **Append-only**
+- Never mutated
+- All agents, tools, workflows read only from context
+
+**State = views over context**
+(e.g., last 50 messages, current session, etc.)
+
+---
+
+### 1.3 Agent
+
+Agents are **pure functions** from:
+
+```
+agent(context, input) -> event
+```
+
+- Agents do not mutate state or variables
+- Agents only produce a new event
+- Agents may call tools or models
+- Policies may restrict allowed actions
+
+Example:
+
+```a22
+agent "chatbot"
+	can chat
+	use model: :gpt4
+```
+
+---
+
+### 1.4 Workflow
+
+A workflow is a **temporal DAG** of pure steps.
+
+Each step is a pure function:
+
+```
+step(context, inputs) -> event
+```
+
+Workflow execution:
+1. A step runs when its inputs are available
+2. Step produces an event
+3. Event appended to context
+4. Next steps become eligible
+
+Built-in flow constructs:
+- `steps`
+- `parallel`
+- `branch`
+- `loop`
+- `return`
+
+---
+
+### 1.5 Tool
+
+Tools are pure from A22's perspective:
+
+```
+tool_call(input) -> event
+```
+
+Tools define:
+- Input schema
+- Output schema
+- Auth
+- Runtime (e.g., python, js)
+- Sandbox (timeout, memory, fs, network)
+
+Even if tools cause side effects externally, A22 sees only the tool output event.
 
 ---
 
 ## 2. Syntax Overview
 
-A22 uses a Terraform-style declarative syntax with:
-*   Double-quoted identifiers for named resources
-*   Curly-brace block structure
-*   HCL-like expressions (strings, booleans, numbers, arrays, objects)
+A22 is **indentation-based** (tabs or 4 spaces).
 
-### 2.1 Example
+### 2.1 Top-Level Declarations
 
 ```a22
-agent "support_bot" {
-    capabilities = ["memory", "retrieval"]
+agent "name"
+tool "name"
+workflow "name"
+policy :name
+provider :name
+schedule "name"
+prompt :name
+test "name"
+import
+```
 
-    on event "user_message" {
-        use tool "embedder"
-        call workflow "answer_user"
-    }
-}
+### 2.2 Basic Example
+
+```a22
+agent "assistant"
+	can chat, search
+	use model: :gpt4
+
+	state :persistent
+		remembers conversation: last 50
+
+	when user.message
+		-> respond
 ```
 
 ---
 
-## 3. Core Blocks
+## 3. Agents
 
----
+Agents describe autonomous behaviors as pure functions over context.
 
-### 3.1 AGENT Block
-
-Defines an autonomous or semi-autonomous agent with model configuration, security policy, and isolation settings.
-
-**Syntax**
+### 3.1 Structure
 
 ```a22
-agent "<name>" {
-    capabilities = [ ... ]
-    state        = data.<schema>?
-
-    # Simple model reference
-    model = "<model-id>"?
-
-    # OR: Advanced model configuration with fallback
-    model {
-        primary = {
-            provider = provider.<name>
-            name     = "<model-name>"
-            params {
-                temperature = <number>
-                max_tokens  = <number>
-                # ... provider-specific params
-            }
-        }
-        fallback = [
-            { provider = provider.<name>, name = "<model-name>" },
-            # ... additional fallback providers
-        ]
-        strategy = "failover" | "cost_optimized" | "latency_optimized" | "capability_based"
-    }
-
-    # Security policy (optional)
-    policy = policy.<name>?
-
-    # OR: Inline policy
-    policy {
-        allow { ... }
-        deny { ... }
-        limits { ... }
-    }
-
-    # Isolation configuration (optional)
-    isolation {
-        memory     = "strict" | "shared" | "none"
-        network    = "full" | "limited" | "none"
-        filesystem = "full" | "readonly" | "none"
-    }
-
-    # System prompt (optional)
-    system_prompt = "<prompt-text>"?
-
-    # Event handlers
-    on event "<event-name>" {
-        call workflow "<workflow-name>"?
-        use tool "<tool-name>"?
-    }
-}
+agent "name"
+	can capability_list
+	use ...               # tools, models, prompts
+	has ...               # policies, resources
+	state ...             # memory rules
+	prompt ...            # system/user templates
+	when condition
+		-> action
 ```
 
-**Fields**
+### 3.2 Capabilities
 
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `capabilities` | `array(string)` | Yes | Declares required capabilities |
-| `state` | `reference` | No | Data schema attached to agent memory |
-| `model` | `string \| block` | No | Model configuration (simple string or advanced config) |
-| `policy` | `reference \| block` | No | Security policy (reference or inline) |
-| `isolation` | `block` | No | Isolation configuration for security boundaries |
-| `system_prompt` | `string` | No | System-level prompt for the agent |
-| `on event` | `block` | No | Event handler |
-
-**Model Configuration**
-
-Agents can specify models in two ways:
-
-1. **Simple**: `model = "gpt-4"` - Runtime resolves to configured provider
-2. **Advanced**: `model { ... }` - Explicit provider, fallback chain, and strategy
-
-**Selection Strategies**:
-*   `failover` (default) - Try primary, use fallback on error
-*   `cost_optimized` - Choose cheapest provider meeting requirements
-*   `latency_optimized` - Choose fastest provider based on historical data
-*   `capability_based` - Route based on task complexity
-
-**Isolation Levels**:
-*   `strict` - Complete isolation, no shared resources
-*   `shared` - Can access shared resources with permissions
-*   `none` - No isolation (development only)
-
-**Semantics**
-*   Agents do nothing unless triggered by events or workflows
-*   Capabilities must be supplied by runtime or bound at execution time
-*   Model provider must be configured in runtime or declared via `provider` block
-*   Security policies are enforced at runtime before any action
-*   Isolation boundaries prevent unauthorized resource access
-
----
-
-### 3.2 CAPABILITY Block
-
-Defines an abstract capability an agent may require, with permission requirements and grants.
-
-**Syntax**
+Declare what an agent can do:
 
 ```a22
-capability "retrieval" {
-    kind        = "external" | "system" | "builtin"
-    description = "<description>"?
-
-    # Required permissions (optional)
-    requires {
-        permissions = [
-            { resource = "<resource>", action = "read" | "write" | "execute" | "admin" },
-            # ... additional permissions
-        ]
-    }
-
-    # What this capability grants access to (optional)
-    grants {
-        tools     = ["<tool-name>", ...]?
-        workflows = ["<workflow-name>", ...]?
-        data      = ["<data-type>", ...]?
-    }
-}
+agent "researcher"
+	can chat, search, remember, analyze
 ```
 
-**Fields**
+### 3.3 Model Configuration
 
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `kind` | `string` | Yes | Capability type: external, system, or builtin |
-| `description` | `string` | No | Human-readable description |
-| `requires` | `block` | No | Permission requirements |
-| `grants` | `block` | No | What resources this capability provides access to |
-
-**Permission Actions**:
-*   `read` - Read/retrieve data or resources
-*   `write` - Create/modify data or resources
-*   `execute` - Execute tools, workflows, or operations
-*   `admin` - Full control over resources
-
-**Resource Types**:
-*   `tool.<name>` - Specific tool access
-*   `workflow.<name>` - Specific workflow access
-*   `data.<type>` - Data type access
-*   `filesystem` - File system access
-*   `network` - Network access
-*   `memory` - Memory access
-*   `*` - All resources (admin only)
-
-**Semantics**
-*   Capabilities are contracts only; implementations are runtime-specific
-*   Runtime must check permission requirements before granting capability
-*   Grants define what an agent can access when capability is bound
-
----
-
-### 3.3 TOOL Block
-
-Represents a callable function, API, or external executor with security constraints and sandboxing.
-
-**Syntax**
+#### Simple Model
 
 ```a22
-tool "<name>" {
-    schema {
-        input  = data.<InputType>?
-        output = data.<OutputType>?
-        # OR: inline schema
-        field1: string
-        field2: number
-        field3: array<string>
-    }
-
-    handler = external("<binding>")
-
-    # Security configuration (optional)
-    security {
-        # Input validation
-        validate {
-            <field-name> = {
-                max_length    = <number>?
-                min_length    = <number>?
-                pattern       = "<regex>"?
-                deny_patterns = ["<pattern>", ...]?
-                min           = <number>?  # For numeric fields
-                max           = <number>?  # For numeric fields
-            }
-        }
-
-        # Execution sandbox
-        sandbox {
-            timeout_ms        = <number>?
-            max_memory_mb     = <number>?
-            network_allowed   = <boolean>?
-            network_hosts     = ["<host>", ...]?  # Whitelist
-            filesystem_allowed = <boolean>?
-            filesystem_paths  = ["<path>", ...]?  # Whitelist
-            filesystem_mode   = "readonly" | "readwrite"?
-        }
-
-        # Output validation
-        output {
-            max_size_kb = <number>?
-            schema      = data.<type>?  # Enforce schema match
-        }
-    }
-}
+agent "writer"
+	use model: :gpt4
 ```
 
-**Fields**
-
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `schema` | `block` | Yes | Input/output schema definition |
-| `handler` | `string` | Yes | External handler binding |
-| `security` | `block` | No | Security configuration and sandboxing |
-
-**Security Configuration**:
-
-**`validate`**: Input validation rules per field
-*   `max_length` / `min_length` - String length constraints
-*   `pattern` - Regex pattern that must match
-*   `deny_patterns` - Regex patterns that must NOT match (e.g., SQL injection)
-*   `min` / `max` - Numeric range constraints
-
-**`sandbox`**: Execution environment restrictions
-*   `timeout_ms` - Maximum execution time in milliseconds
-*   `max_memory_mb` - Maximum memory allocation
-*   `network_allowed` - Whether network access is permitted
-*   `network_hosts` - Whitelist of allowed hosts (requires `network_allowed = true`)
-*   `filesystem_allowed` - Whether file system access is permitted
-*   `filesystem_paths` - Whitelist of allowed paths (requires `filesystem_allowed = true`)
-*   `filesystem_mode` - Read-only or read-write access
-
-**`output`**: Output validation
-*   `max_size_kb` - Maximum output size in kilobytes
-*   `schema` - Data type schema that output must conform to
-
-**Semantics**
-*   Tools are side-effecting operations
-*   Runtime determines actual function binding (cloud, local, API, etc)
-*   Security validations are enforced before and after tool execution
-*   Sandbox restrictions are enforced during tool execution
-*   Violations result in tool execution failure
-
----
-
-### 3.4 EVENT Block
-
-Defines an event that can be emitted or listened for.
-
-**Syntax**
+#### Advanced Model with Fallback
 
 ```a22
-event "user_message" {
-    payload = data.UserMessage
-}
+agent "resilient"
+	use model
+		primary :gpt4 from :openai
+		fallback [:claude from :anthropic, :gemini from :google]
+		strategy :failover
+```
+
+**Strategies:**
+- `:failover` - Try providers in order until success
+- `:cost_optimized` - Choose cheapest available
+- `:latency_optimized` - Choose fastest based on history
+- `:round_robin` - Distribute load evenly
+
+### 3.4 State and Memory
+
+State is a **projection over context**, not a mutable store.
+
+```a22
+agent "assistant"
+	state :persistent
+		backend :redis
+		ttl 24h
+
+	remembers
+		conversation: last 50 messages
+		preferences: always
+		context: current_session
+```
+
+**State Backends:**
+- `:memory` - In-memory (ephemeral)
+- `:redis` - Redis persistence
+- `:postgres` - PostgreSQL persistence
+- `:custom` - Custom backend
+
+**Remember Patterns:**
+- `last N messages` - Keep N most recent items
+- `always` - Persist permanently
+- `current_session` - Session-scoped
+
+### 3.5 Prompts
+
+```a22
+agent "assistant"
+	prompt :system
+		"You are a helpful AI assistant."
+
+	prompt :user
+		"Please respond concisely."
+```
+
+#### Conditional Prompts
+
+```a22
+agent "adaptive"
+	prompt :system
+		when user.expertise == "expert"
+			-> "Use advanced technical explanations."
+		when user.expertise == "beginner"
+			-> "Use simple, clear language."
+```
+
+### 3.6 Event Handlers
+
+```a22
+agent "bot"
+	when user.message
+		-> respond
+
+	when system.error
+		-> log_and_notify
+```
+
+### 3.7 Complete Agent Example
+
+```a22
+agent "research_assistant"
+	can search, analyze, summarize, cite_sources
+	use model: :gpt4
+	use tools: [web_search, arxiv_search]
+	has policy: :safe_mode
+
+	prompt :system
+		"You are a research assistant that finds and analyzes academic information."
+
+	state :persistent
+		backend :redis
+		ttl 86400
+
+	remembers
+		research_history: last 100 queries
+		preferences: always
+
+	when user.query
+		-> .research_workflow
 ```
 
 ---
 
-### 3.5 WORKFLOW Block
+## 4. Tools
 
-Workflows orchestrate steps, tools, and agent calls.
+Tools wrap external functions/APIs as pure transformations from A22's perspective.
 
-**Syntax**
+### 4.1 Structure
 
 ```a22
-workflow "answer_user" {
-    steps {
-        embed  = tool "embedder" { text = input.text }
-        search = capability "retrieval" { query = embed.vector }
-        reply  = agent "support_bot" { context = search.docs }
-    }
-    returns = data.Answer
-}
+tool "name"
+	endpoint "url"
+	runtime :type
+	auth credential_ref
+
+	input
+		field: type
+
+	output
+		field: type
+
+	validates
+		field: rules
+
+	sandbox
+		constraints
 ```
 
-**Execution Semantics**
-*   Steps run in order unless `parallel` keyword is used.
-*   Steps reference tools, agents, or capabilities.
-*   Workflows can emit events.
-
----
-
-### 3.6 DATA Block
-
-Defines structured data schemas.
-
-**Syntax**
+### 4.2 Basic Tool
 
 ```a22
-data Answer {
-    text: string
-    confidence: number
-}
+tool "web_search"
+	endpoint "https://api.search.com/v1"
+	runtime :http
+	auth env.SEARCH_KEY
+
+	input
+		query: text
+		max_results: number
+
+	output
+		results: list
 ```
 
-Supported primitive types:
-*   `string`
-*   `number`
-*   `boolean`
-*   `array<T>`
-*   `object { ... }`
-
----
-
-### 3.7 PROVIDER Block
-
-Defines a model provider configuration with credentials, endpoints, and rate limits.
-
-**Syntax**
+### 4.3 Input Validation
 
 ```a22
-provider "<name>" {
-    type = "llm" | "embedding" | "vision" | "audio"
+tool "send_email"
+	input
+		to: text
+		subject: text
+		body: text
 
-    # Credential reference (NOT actual keys)
-    credentials = env.<VAR_NAME>
-    # OR: Multiple credentials
-    credentials {
-        api_key = env.<VAR_NAME>
-        org_id  = env.<VAR_NAME>
-        # ... provider-specific credentials
-    }
-
-    # Provider-specific configuration
-    config {
-        endpoint = "<url>"?
-        timeout  = <milliseconds>?
-        retry    = <boolean>?
-        # ... provider-specific config
-    }
-
-    # Rate limits (optional)
-    limits {
-        requests_per_minute = <number>?
-        tokens_per_minute   = <number>?
-        requests_per_day    = <number>?
-    }
-}
+	validates
+		to
+			pattern: "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+		subject
+			max_length: 200
+		body
+			max_length: 10000
+			deny_patterns: ["<script", "javascript:"]
 ```
 
-**Fields**
-
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `type` | `string` | Yes | Provider category: llm, embedding, vision, or audio |
-| `credentials` | `reference \| block` | No | Environment variable reference(s) for credentials |
-| `config` | `block` | No | Provider-specific configuration |
-| `limits` | `block` | No | Rate limiting and quota configuration |
-
-**Credential References**:
-
-Credentials must ALWAYS reference environment variables or secrets, never literal strings:
-*   `env.<VAR_NAME>` - Environment variable (e.g., `env.OPENAI_API_KEY`)
-*   `secrets.<key_name>` - Secrets manager reference (runtime-specific)
-
-**Parser Validation**: The parser MUST reject credential-like strings (e.g., starting with `sk-`, `api_`, etc.)
-
-**Provider Types**:
-*   `llm` - Large language models (text generation, chat)
-*   `embedding` - Text embedding models
-*   `vision` - Image/video understanding models
-*   `audio` - Speech-to-text, text-to-speech models
-
-**Semantics**
-*   Providers define how to connect to model APIs
-*   Runtime loads actual credentials from environment at execution time
-*   Rate limits are enforced by runtime to prevent quota exhaustion
-*   Provider configurations are reusable across multiple agents
-
-**Example**:
+### 4.4 Sandbox Configuration
 
 ```a22
-provider "openai" {
-    type = "llm"
-    credentials = env.OPENAI_API_KEY
+tool "execute_code"
+	sandbox
+		timeout: 10s
+		memory: 256mb
+		network: none
+		filesystem: readonly ["/tmp"]
+```
 
-    config {
-        endpoint = "https://api.openai.com/v1"
-        timeout  = 30000
-    }
+**Sandbox Options:**
+- `timeout` - Max execution time
+- `memory` - Max memory usage
+- `network` - `none`, `limited`, `full`
+- `filesystem` - `none`, `readonly [paths]`, `readwrite [paths]`
 
-    limits {
-        requests_per_minute = 60
-        tokens_per_minute   = 90000
-    }
-}
+### 4.5 Runtime Types
+
+```a22
+tool "python_script"
+	runtime :python
+	handler "scripts/analyze.py"
+
+tool "js_function"
+	runtime :js
+	handler "functions/process.js"
+
+tool "http_api"
+	runtime :http
+	endpoint "https://api.example.com"
+
+tool "native_binary"
+	runtime :native
+	handler "/usr/bin/tool"
 ```
 
 ---
 
-### 3.8 POLICY Block
+## 5. Workflows
 
-Defines a security policy with access control rules and resource limits.
+Workflows orchestrate deterministic dataflow as temporal DAGs.
 
-**Syntax**
+### 5.1 Sequential Steps
 
 ```a22
-policy "<name>" {
-    # Whitelist of allowed resources
-    allow {
-        tools     = ["<tool-name>" | "*", ...]?
-        workflows = ["<workflow-name>" | "*", ...]?
-        data      = ["<data-type>" | "*", ...]?
-        capabilities = ["<capability-name>", ...]?
-    }
+workflow "research"
+	steps
+		query = web_search
+			query: input.topic
+			max_results: 10
 
-    # Blacklist of denied resources (overrides allow)
-    deny {
-        tools     = ["<tool-name>", ...]?
-        workflows = ["<workflow-name>", ...]?
-        data      = ["<data-type>", ...]?
-    }
+		summary = summarize
+			content: query.results
 
-    # Resource limits
-    limits {
-        max_memory_mb      = <number>?
-        max_execution_time = <milliseconds>?
-        max_tool_calls     = <number>?
-        max_workflow_depth = <number>?
-    }
-}
+		return summary
 ```
 
-**Fields**
-
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `allow` | `block` | No | Whitelist of permitted resources |
-| `deny` | `block` | No | Blacklist of forbidden resources (takes precedence) |
-| `limits` | `block` | No | Resource consumption limits |
-
-**Access Control**:
-
-Policies use a **deny-by-default** model with explicit allow lists:
-*   Resources not in `allow` are denied by default
-*   Resources in `deny` are always forbidden (overrides `allow`)
-*   Wildcards (`*`) grant access to all resources of that type
-*   Specific resource names provide fine-grained control
-
-**Resource Limits**:
-*   `max_memory_mb` - Maximum memory allocation in megabytes
-*   `max_execution_time` - Maximum total execution time in milliseconds
-*   `max_tool_calls` - Maximum number of tool invocations
-*   `max_workflow_depth` - Maximum workflow nesting depth
-
-**Semantics**
-*   Policies are enforced at runtime before any resource access
-*   Deny rules always take precedence over allow rules
-*   Limit violations cause immediate termination
-*   Policies can be reused across multiple agents
-
-**Example**:
+### 5.2 Parallel Execution
 
 ```a22
-policy "restricted" {
-    allow {
-        tools = ["web_search", "calculator"]
-        workflows = ["simple_query"]
-    }
+workflow "multi_source"
+	steps
+		parallel
+			web = web_search query: input.topic
+			arxiv = arxiv_search query: input.topic
+			news = news_search query: input.topic
 
-    deny {
-        tools = ["exec_shell", "file_delete"]
-    }
+		combined = merge_results
+			sources: [web.results, arxiv.results, news.results]
 
-    limits {
-        max_memory_mb      = 512
-        max_execution_time = 30000
-        max_tool_calls     = 10
-    }
-}
+		return combined
+```
+
+### 5.3 Branching
+
+```a22
+workflow "quality_gate"
+	steps
+		draft = generate_content topic: input.topic
+
+		quality = evaluate draft: draft.content
+
+		branch quality.score
+			when >8 -> publish draft
+			when 5..8 -> edit_and_publish draft
+			when <5 -> regenerate input.topic
+```
+
+### 5.4 Loops
+
+```a22
+workflow "iterative_improvement"
+	steps
+		draft = initial_draft topic: input.topic
+
+		loop max: 3
+			quality = evaluate draft: draft
+
+			when quality.score >8
+				-> break
+
+			draft = improve
+				content: draft
+				feedback: quality.feedback
+
+		return draft
+```
+
+### 5.5 Human-in-the-Loop
+
+```a22
+workflow "review_publish"
+	steps
+		draft = generate_article topic: input.topic
+
+		approval = human_in_loop
+			show: draft
+			ask: "Approve for publishing?"
+			options: [approve, reject, edit]
+			timeout: 1h
+			default: reject
+
+		branch approval
+			when "approve" -> publish draft
+			when "reject" -> notify_rejection
+			when "edit" -> .edit_workflow
+```
+
+### 5.6 Agent Calls
+
+```a22
+workflow "assisted_research"
+	steps
+		outline = agent "outliner"
+			message: "Create an outline for: {input.topic}"
+
+		research = agent "researcher"
+			message: "Research each section"
+			context: outline.content
+
+		return research.content
+```
+
+### 5.7 Error Handling
+
+```a22
+workflow "resilient"
+	steps
+		result = risky_operation input: input.data
+
+	on_failure
+		retry max: 3 backoff: exponential
 ```
 
 ---
 
-### 3.9 TEMPLATE Block
+## 6. Policies
 
-Defines a reusable prompt template for agents.
+Policies constrain allowed behavior. They are checked before events are appended to context.
 
-**Syntax**
+### 6.1 Structure
 
 ```a22
-template "<name>" {
-    system      = "<system-prompt>"?
-    user_prefix = "<prefix>"?
-    user_suffix = "<suffix>"?
-    format      = "<format-string>"?
-}
+policy :name
+	allow
+		resources
+
+	deny
+		resources
+
+	limits
+		constraints
 ```
 
-**Fields**
-
-| Field | Type | Required | Description |
-| :--- | :--- | :--- | :--- |
-| `system` | `string` | No | System-level prompt text |
-| `user_prefix` | `string` | No | Prefix added to user messages |
-| `user_suffix` | `string` | No | Suffix added to user messages |
-| `format` | `string` | No | Format string for message composition |
-
-**Semantics**
-*   Templates are reusable prompt configurations
-*   Agents reference templates via `prompt_template = template.<name>`
-*   Runtime applies template formatting to messages
-
-**Example**:
+### 6.2 Basic Policy
 
 ```a22
-template "research_assistant" {
-    system = """
-        You are a research assistant specializing in scientific literature.
-        Always cite sources and maintain academic tone.
-        Provide clear, evidence-based responses.
-    """
-    user_prefix = "Research Question: "
-}
+policy :safe_mode
+	allow
+		tools [web_search, email_send]
+		capabilities [chat, search]
+		data [public_docs]
+
+	deny
+		tools [system_commands, file_delete]
+		data [user_credentials]
+
+	limits
+		max_tokens: 10000
+		max_execution_time: 30s
+		max_tool_calls: 50
+```
+
+### 6.3 Policy Enforcement
+
+When a policy violation occurs, runtime emits a `policy.violation` event and halts the operation.
+
+```a22
+agent "restricted"
+	has policy: :safe_mode
+
+	# This agent cannot use tools not in :safe_mode allow list
 ```
 
 ---
 
-### 3.10 CONFIG Block Extensions
+## 7. Providers
 
-The `config` block supports runtime configuration for monitoring, auditing, and observability.
+Providers configure external model systems.
 
-**Syntax**
-
-```a22
-# Audit logging configuration
-config "audit" {
-    enabled = <boolean>
-
-    log_events = [
-        "agent.start" | "agent.stop" | "agent.error" |
-        "tool.call" | "tool.error" |
-        "workflow.execute" | "workflow.error" |
-        "permission.denied" | "credential.access",
-        # ... additional events
-    ]
-
-    destination = "<uri>"  # file://, syslog://, cloudwatch://
-    format      = "json" | "text" | "cef"
-    retention_days = <number>?
-    include_payloads = <boolean>?  # Security vs debugging tradeoff
-}
-
-# Monitoring configuration
-config "monitoring" {
-    usage_tracking = <boolean>?
-    cost_tracking  = <boolean>?
-    metrics        = <boolean>?
-    tracing        = <boolean>?
-
-    budget {
-        daily_limit_usd  = <number>?
-        alert_threshold  = <number>?  # 0.0 to 1.0
-        hard_stop        = <boolean>?
-    }
-
-    health_check {
-        interval_seconds = <number>?
-        endpoint         = "<path>"?
-    }
-
-    alerts {
-        latency_threshold_ms = <number>?
-        error_rate_threshold = <number>?  # 0.0 to 1.0
-    }
-}
-```
-
-**Audit Events**:
-*   `agent.start` / `agent.stop` / `agent.error` - Agent lifecycle
-*   `tool.call` / `tool.error` - Tool execution
-*   `workflow.execute` / `workflow.error` - Workflow execution
-*   `permission.denied` - Security violations
-*   `credential.access` - Credential usage
-
-**Log Destinations**:
-*   `file://./path/to/log` - Local file
-*   `syslog://host:port` - Syslog server
-*   `cloudwatch://log-group` - AWS CloudWatch (runtime-specific)
-
-**Semantics**
-*   Audit logs provide security and compliance trails
-*   Monitoring tracks resource usage and costs
-*   Budget limits prevent cost overruns
-*   Health checks ensure system availability
-*   Alerts notify operators of issues
-
----
-
-## 4. Expressions & Values
-
-A22 supports:
-*   Strings: `"hello"`
-*   Numbers: `42`, `3.14`
-*   Booleans: `true`, `false`
-*   Arrays: `[1, 2, 3]`
-*   Objects:
+### 7.1 Structure
 
 ```a22
-{
-    a = 1
-    b = true
-}
+provider :name
+	type :category
+	auth credential_ref
+	config
+		settings
+	limits
+		rate_limits
 ```
 
-No custom functions or expressions allowed v1.0 — keeps language pure & deterministic.
-
----
-
-## 5. Execution Model
-
-### 5.1 Runtime Responsibilities
-
-A runtime MUST:
-1.  Parse & validate A22 files
-2.  Resolve capabilities
-3.  Bind tools to handlers
-4.  Execute workflows in deterministic order
-5.  Maintain agent state if defined
-6.  Enforce sandboxing & security boundaries
-7.  Support event dispatch & routing
-
-### 5.2 Determinism
-*   Workflow step ordering is deterministic.
-*   Tools may be nondeterministic; A22 does not impose constraints.
-
-### 5.3 Error Handling
-
-Runtimes must:
-*   Surface schema validation errors
-*   Surface missing capability binding errors
-*   Provide structured error messages
-
----
-
-## 6. AST & IR Requirements
-
-A22 languages must translate to a canonical IR containing:
-*   Block types + names
-*   Field bodies
-*   Data schemas
-*   Workflow step graph
-*   Event routing table
-*   Capability contract requirements
-
-Runtimes must accept this IR structure.
-
-AST structure is implementation-specific, but must be lossy of no data.
-
----
-
-## 7. Validation Rules
-
-A22 requires the following validation:
-
-**Core Validation**:
-1. Agents must reference valid events + workflows
-2. Tools must reference valid schemas
-3. Data schemas must be acyclic
-4. Workflow steps must reference defined entities
-5. Capabilities must match invocation shapes
-6. No duplicate block names of same type within the same block type
-7. No undeclared identifiers
-
-**Model Gateway Validation**:
-8. `provider` blocks must have unique names
-9. `credentials` must reference `env.*` or `secrets.*`, never literal strings
-10. Parser MUST reject credential-like strings (e.g., starting with `sk-`, `api_`, `key_`, etc.)
-11. Provider references must resolve to declared providers
-12. Model selection `strategy` must be one of: `failover`, `cost_optimized`, `latency_optimized`, `capability_based`, `round_robin`
-13. If `model.fallback` is specified, `model.primary` must exist
-
-**Security Validation**:
-14. `policy` blocks must have unique names
-15. Policy references must resolve to declared policies
-16. `limits` values must be positive numbers
-17. `isolation` levels must be one of: `strict`, `shared`, `none`
-18. `sandbox.network_hosts` must be valid hostnames or IP addresses
-19. `validate.pattern` and `validate.deny_patterns` must be valid regex
-20. Permission `action` must be one of: `read`, `write`, `execute`, `admin`
-21. Permission `resource` must be a valid resource identifier or wildcard
-22. Denied resources in policy take precedence over allowed resources
-
-**General Validation**:
-23. `env.*` references must be valid identifier names (alphanumeric + underscore)
-24. Audit log destinations must be valid URIs
-25. Template references must resolve to declared templates
-26. All block references must be resolvable at parse time or clearly marked as runtime-bound
-
----
-
-## 8. Versioning
-
-A22 follows semantic versioning:
-*   `0.x` = not yet stable
-*   `1.x` = stable language
-*   `2.x` = potential breaking syntax changes
-
-Backward compatibility is required unless otherwise stated.
-
----
-
-## 9. Reserved Keywords
-
-**Core Blocks**:
-*   `agent`
-*   `tool`
-*   `capability`
-*   `workflow`
-*   `event`
-*   `data`
-*   `config`
-*   `provider`
-*   `policy`
-*   `template`
-
-**Workflow & Execution**:
-*   `steps`
-*   `parallel`
-*   `returns`
-*   `input`
-*   `output`
-*   `error_boundary`
-*   `retry`
-*   `on`
-
-**Tool & Handler**:
-*   `schema`
-*   `handler`
-*   `external`
-*   `security`
-*   `sandbox`
-*   `validate`
-
-**Model Gateway**:
-*   `model`
-*   `credentials`
-*   `strategy`
-*   `fallback`
-*   `primary`
-*   `params`
-*   `env`
-*   `secrets`
-*   `limits`
-
-**Security & Policy**:
-*   `policy`
-*   `allow`
-*   `deny`
-*   `isolation`
-*   `requires`
-*   `grants`
-*   `permissions`
-
-**Configuration**:
-*   `audit`
-*   `monitoring`
-*   `metrics`
-*   `tracing`
-*   `alerts`
-*   `budget`
-*   `health_check`
-
-**Data & Types**:
-*   `string`
-*   `number`
-*   `boolean`
-*   `array`
-*   `object`
-
-**State & Capability**:
-*   `state`
-*   `capabilities`
-*   `kind`
-
-**Template & Prompts**:
-*   `system_prompt`
-*   `prompt_template`
-*   `system`
-*   `user_prefix`
-*   `user_suffix`
-*   `format`
-
----
-
-## 10. Security & Isolation
-
-A22 provides a comprehensive security model with multiple layers of defense.
-
-### 10.1 Security Principles
-
-1. **Deny by Default**: Resources are inaccessible unless explicitly allowed
-2. **Least Privilege**: Agents have minimal permissions needed for their function
-3. **Defense in Depth**: Multiple security layers (policies, sandboxing, isolation)
-4. **Audit Everything**: All security-relevant events are logged
-5. **Credential Security**: API keys never appear in .a22 files
-
-### 10.2 Security Layers
-
-**Layer 1: Policy-Based Access Control**
-*   Policies define allow/deny rules for tools, workflows, and data
-*   Enforced before any resource access
-*   Deny rules override allow rules
-*   Resource limits prevent abuse
-
-**Layer 2: Tool Sandboxing**
-*   Input validation prevents injection attacks
-*   Execution sandbox limits resources (CPU, memory, time)
-*   Network and filesystem access restrictions
-*   Output validation prevents data exfiltration
-
-**Layer 3: Agent Isolation**
-*   Memory isolation prevents cross-agent access
-*   Network isolation controls external communication
-*   Filesystem isolation restricts file access
-*   State persistence controls prevent data leakage
-
-**Layer 4: Audit Logging**
-*   All security events logged
-*   Tool invocations tracked
-*   Permission denials recorded
-*   Credential access monitored
-
-### 10.3 Credential Management
-
-**Critical Security Requirement**: Credentials MUST NEVER appear in .a22 files.
-
-**Allowed**: Environment variable references
-```a22
-provider "openai" {
-    credentials = env.OPENAI_API_KEY
-}
-```
-
-**Forbidden**: Literal credential strings
-```a22
-provider "openai" {
-    credentials = "sk-proj-abc123..."  # PARSER ERROR!
-}
-```
-
-**Parser Validation**: Must reject strings matching credential patterns:
-*   Starting with `sk-`, `key-`, `api_`, `secret_`
-*   Pattern: `^(sk|key|api|secret)[-_]`
-*   Any base64-encoded strings > 32 characters in credential fields
-
-**Runtime Loading**:
-1. Runtime reads .a22 file (contains only references)
-2. Runtime loads environment variables
-3. Runtime resolves `env.*` references at execution time
-4. Credentials never logged or exposed
-
-### 10.4 Runtime Enforcement
-
-Runtimes MUST enforce:
-
-**At Parse Time**:
-*   Reject credential-like strings
-*   Validate all policy and security configurations
-*   Ensure all references are resolvable
-
-**At Execution Time**:
-*   Check policy permissions before resource access
-*   Enforce sandbox restrictions during tool execution
-*   Enforce isolation boundaries for agent memory
-*   Track and limit resource consumption
-*   Log all security-relevant events
-
-**Execution Locality**:
-*   A22 does not define where code runs (cloud, local, edge)
-*   Security policies are portable across runtimes
-*   Implementation-specific: container vs process vs VM isolation
-
-### 10.5 Security Best Practices
-
-**For Agent Builders**:
-1. Always use policies to restrict agent capabilities
-2. Set resource limits to prevent runaway execution
-3. Use input validation for all tool parameters
-4. Enable audit logging in production
-5. Use strict isolation for untrusted agents
-6. Deny dangerous tools by default (exec_shell, file_delete, etc.)
-
-**For Runtime Implementers**:
-1. Enforce credential validation at parse time
-2. Implement proper sandbox isolation
-3. Rate limit API calls to providers
-4. Encrypt agent state at rest
-5. Implement audit log rotation and retention
-6. Provide security policy templates for common use cases
-
-### 10.6 Threat Model
-
-A22's security model protects against:
-
-**Injection Attacks**:
-*   SQL injection via input validation
-*   Command injection via sandbox restrictions
-*   Prompt injection via input sanitization
-
-**Resource Abuse**:
-*   DoS via execution time limits
-*   Memory exhaustion via memory limits
-*   API quota exhaustion via rate limiting
-
-**Data Exfiltration**:
-*   Output size limits
-*   Network whitelisting
-*   Filesystem access restrictions
-*   Audit logging of data access
-
-**Credential Theft**:
-*   No credentials in .a22 files
-*   Environment variable isolation
-*   Audit logging of credential access
-
----
-
-## 11. Complete Examples
-
-### 11.1 Multi-Provider Agent with Fallback and Security
-
-This example demonstrates:
-- Multiple model providers with fallback
-- Security policies with resource limits
-- Tool sandboxing with input validation
-- Audit logging
+### 7.2 Examples
 
 ```a22
-# Provider configurations
-provider "openai" {
-    type = "llm"
-    credentials = env.OPENAI_API_KEY
+provider :openai
+	type :llm
+	auth env.OPENAI_KEY
 
-    config {
-        endpoint = "https://api.openai.com/v1"
-        timeout  = 30000
-    }
+	config
+		endpoint "https://api.openai.com/v1"
+		timeout 30s
 
-    limits {
-        requests_per_minute = 60
-        tokens_per_minute   = 90000
-    }
-}
+	limits
+		requests_per_minute: 60
+		tokens_per_minute: 90000
 
-provider "anthropic" {
-    type = "llm"
-    credentials = env.ANTHROPIC_API_KEY
+provider :anthropic
+	type :llm
+	auth env.ANTHROPIC_KEY
 
-    config {
-        endpoint = "https://api.anthropic.com/v1"
-    }
-}
+	config
+		endpoint "https://api.anthropic.com/v1"
 
-provider "local_ollama" {
-    type = "llm"
-
-    config {
-        endpoint = "http://localhost:11434/api"
-    }
-}
-
-# Security policy
-policy "research_policy" {
-    allow {
-        tools = ["web_search", "document_retriever"]
-        workflows = ["research_workflow"]
-    }
-
-    deny {
-        tools = ["exec_shell", "file_delete"]
-    }
-
-    limits {
-        max_memory_mb      = 1024
-        max_execution_time = 120000  # 2 minutes
-        max_tool_calls     = 20
-    }
-}
-
-# Data schemas
-data SearchQuery {
-    query: string
-    max_results: number
-}
-
-data SearchResult {
-    title: string
-    url: string
-    snippet: string
-}
-
-data SearchResults {
-    results: array<SearchResult>
-}
-
-data ResearchReport {
-    summary: string
-    sources: array<string>
-    confidence: number
-}
-
-# Sandboxed tool
-tool "web_search" {
-    schema {
-        input  = data.SearchQuery
-        output = data.SearchResults
-    }
-
-    handler = external("https://api.search.example.com/search")
-
-    security {
-        validate {
-            query = {
-                max_length    = 500
-                pattern       = "^[a-zA-Z0-9\\s\\-_]+$"
-                deny_patterns = ["DROP TABLE", "SELECT *", "<script>"]
-            }
-            max_results = {
-                min = 1
-                max = 50
-            }
-        }
-
-        sandbox {
-            timeout_ms      = 10000
-            max_memory_mb   = 128
-            network_allowed = true
-            network_hosts   = ["api.search.example.com"]
-        }
-
-        output {
-            max_size_kb = 500
-            schema      = data.SearchResults
-        }
-    }
-}
-
-# Agent with multi-provider fallback
-agent "research_assistant" {
-    capabilities = ["memory"]
-
-    model {
-        primary = {
-            provider = provider.openai
-            name     = "gpt-4-turbo"
-            params {
-                temperature = 0.7
-                max_tokens  = 4096
-            }
-        }
-
-        fallback = [
-            {
-                provider = provider.anthropic
-                name     = "claude-3-5-sonnet"
-            },
-            {
-                provider = provider.local_ollama
-                name     = "llama-3.1-70b"
-            }
-        ]
-
-        strategy = "failover"
-    }
-
-    policy = policy.research_policy
-
-    isolation {
-        memory     = "strict"
-        network    = "limited"
-        filesystem = "readonly"
-    }
-
-    system_prompt = """
-        You are a research assistant specializing in academic research.
-        Always cite sources, maintain objectivity, and provide evidence-based answers.
-    """
-
-    on event "research_request" {
-        call workflow "research_workflow"
-    }
-}
-
-# Event definition
-event "research_request" {
-    payload = data.SearchQuery
-}
-
-# Workflow
-workflow "research_workflow" {
-    steps {
-        search = tool "web_search" {
-            query       = input.query
-            max_results = 10
-        }
-
-        analyze = agent "research_assistant" {
-            context = search.results
-        }
-    }
-
-    returns = data.ResearchReport
-}
-
-# Audit configuration
-config "audit" {
-    enabled = true
-
-    log_events = [
-        "agent.start",
-        "agent.stop",
-        "tool.call",
-        "permission.denied"
-    ]
-
-    destination = "file://./logs/audit.jsonl"
-    format      = "json"
-    retention_days = 90
-    include_payloads = false
-}
-
-# Monitoring configuration
-config "monitoring" {
-    usage_tracking = true
-    cost_tracking  = true
-
-    budget {
-        daily_limit_usd = 50.0
-        alert_threshold = 0.8
-        hard_stop       = true
-    }
-}
+	limits
+		requests_per_minute: 50
 ```
 
-### 11.2 Minimal Example
+### 7.3 Provider Types
 
-A minimal A22 program with basic agent and workflow:
+- `:llm` - Large language models
+- `:embedding` - Embedding models
+- `:vision` - Vision models
+- `:audio` - Audio/speech models
+
+---
+
+## 8. Prompts
+
+Prompts can be declared independently and referenced.
+
+### 8.1 Simple Prompt
 
 ```a22
-data Question {
-    text: string
-}
+prompt :system_default
+	"You are a helpful AI assistant."
 
-data Answer {
-    text: string
-}
-
-provider "openai" {
-    type = "llm"
-    credentials = env.OPENAI_API_KEY
-}
-
-event "user_question" {
-    payload = data.Question
-}
-
-tool "generate_answer" {
-    schema {
-        prompt: string
-    }
-    handler = external("model.generate")
-}
-
-workflow "qa" {
-    steps {
-        answer = tool "generate_answer" { prompt = input.text }
-    }
-    returns = data.Answer
-}
-
-agent "qa_bot" {
-    model = provider.openai.gpt-4
-
-    on event "user_question" {
-        call workflow "qa"
-    }
-}
+prompt :concise
+	"Respond in 2-3 sentences maximum."
 ```
 
-### 11.3 Secure Multi-Agent System
-
-Example of multiple agents with different security policies:
+### 8.2 Conditional Prompts
 
 ```a22
-# Admin policy
-policy "admin" {
-    allow {
-        tools = ["*"]
-        workflows = ["*"]
-    }
+prompt :adaptive
+	when user.role == "developer"
+		-> "Provide technical details and code examples."
+	when user.role == "manager"
+		-> "Focus on high-level summaries and business impact."
+	when user.role == "student"
+		-> "Explain concepts clearly with examples."
+```
 
-    limits {
-        max_memory_mb = 2048
-    }
-}
+### 8.3 Using Prompts
 
-# Analyst policy
-policy "analyst" {
-    allow {
-        tools = ["data_query", "chart_generator"]
-        workflows = ["analysis_workflow"]
-    }
-
-    deny {
-        tools = ["data_delete", "exec_shell"]
-    }
-
-    limits {
-        max_memory_mb      = 1024
-        max_execution_time = 60000
-        max_tool_calls     = 50
-    }
-}
-
-# Public policy
-policy "public" {
-    allow {
-        tools = ["web_search"]
-        workflows = ["public_query"]
-    }
-
-    limits {
-        max_memory_mb      = 256
-        max_execution_time = 10000
-        max_tool_calls     = 5
-    }
-}
-
-# Admin agent
-agent "admin_agent" {
-    model = provider.openai.gpt-4
-    policy = policy.admin
-
-    isolation {
-        memory = "shared"  # Can access shared resources
-    }
-}
-
-# Analyst agent
-agent "analyst_agent" {
-    model = provider.openai.gpt-3.5-turbo
-    policy = policy.analyst
-
-    isolation {
-        memory = "strict"  # Isolated memory
-        network = "limited"
-    }
-}
-
-# Public agent
-agent "public_agent" {
-    model = provider.local_ollama.llama-3.1-8b
-    policy = policy.public
-
-    isolation {
-        memory     = "strict"
-        network    = "limited"
-        filesystem = "none"
-    }
-}
+```a22
+agent "assistant"
+	use prompt: :system_default
 ```
 
 ---
 
-## 12. Credential Management Best Practices
+## 9. Human-in-the-Loop (HIL)
 
-### 12.1 Environment Variables
+HIL introduces a pause for external human decision, implemented as events.
 
-Store credentials in `.env` files (never committed to git):
-
-```bash
-# .env
-OPENAI_API_KEY=sk-proj-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_AI_KEY=...
-```
-
-Reference in A22:
+### 9.1 Structure
 
 ```a22
-provider "openai" {
-    type = "llm"
-    credentials = env.OPENAI_API_KEY
-}
+human_in_loop "name"
+	show: expression
+	ask: "question"
+	options: [choices]
+	timeout: duration
+	default: choice
+	optional: boolean
 ```
 
-### 12.2 Secrets Managers
+### 9.2 Runtime Behavior
 
-For production, use secrets managers:
+When HIL step executes:
+1. Runtime emits `hil.request` event with question and options
+2. Workflow pauses
+3. External system provides human input
+4. Runtime emits `hil.response` event
+5. Workflow continues
+
+### 9.3 Example
 
 ```a22
-provider "openai" {
-    type = "llm"
-    credentials = secrets.openai_key  # Runtime resolves from secrets manager
-}
-```
+workflow "content_approval"
+	steps
+		draft = generate_content topic: input.topic
 
-### 12.3 Development vs Production
+		decision = human_in_loop
+			show: draft.content
+			ask: "Approve this content?"
+			options: [approve, reject, revise]
+			timeout: 2h
+			default: reject
 
-**Development**: Use `.env` files locally
-```bash
-# Load .env
-source .env
-
-# Run A22
-a22 run app.a22
-```
-
-**Production**: Use environment variables or secrets manager
-```bash
-# Set env vars in container/VM
-export OPENAI_API_KEY=...
-
-# Or use secrets manager (AWS, GCP, Azure)
-a22 run app.a22 --secrets aws-secrets-manager
+		branch decision
+			when "approve" -> publish draft
+			when "reject" -> archive draft
+			when "revise" -> .revision_workflow
 ```
 
 ---
 
-## 13. Summary
+## 10. Scheduling
 
-A22 provides a comprehensive, declarative language for building secure, production-ready agentic systems.
+Schedules emit `schedule.tick` events at specified times.
 
-**Key Features**:
-*   **Universal Model Gateway**: Multi-provider support with fallback and cost optimization
-*   **Security First**: Policy-based access control, sandboxing, isolation, audit logging
-*   **Builder-Friendly**: Simple syntax, visual mental model, reusable blocks
-*   **Vendor-Neutral**: No lock-in to specific providers or platforms
-*   **Production-Ready**: Resource limits, monitoring, cost management, compliance
+### 10.1 Structure
 
-**For Builders**: Define agent behavior declaratively without writing code
-**For Runtime Implementers**: Clear specification for parsing, validation, and execution
-**For Security Teams**: Comprehensive security model with defense in depth
+```a22
+schedule "name"
+	trigger_spec
+	run action
+	with params
+```
 
-**Next Steps**:
-1. Review the specification
-2. Implement parsers and runtimes
-3. Build secure, scalable agentic systems
+### 10.2 Interval-Based
+
+```a22
+schedule "hourly_sync"
+	every 1h
+	run .sync_workflow
+
+schedule "daily_report"
+	every day at "09:00" in "UTC"
+	run .generate_report
+```
+
+### 10.3 Cron-Based
+
+```a22
+schedule "weekly_cleanup"
+	every week on monday at "02:00"
+	run .cleanup_workflow
+	with
+		mode: :full
+```
+
+### 10.4 Event-Based
+
+```a22
+schedule "on_new_data"
+	when event "data.updated"
+	run .process_data
+```
+
+---
+
+## 11. Imports
+
+Import declarations from other A22 files.
+
+### 11.1 Import Specific Items
+
+```a22
+import
+	agent "writer"
+	tool "web_search"
+	workflow "research"
+	from "./library.a22"
+```
+
+### 11.2 Import with Aliases
+
+```a22
+import
+	agent "writer" as "content_creator"
+	tool "search" as "web_search"
+	from "./external.a22"
+```
+
+### 11.3 Import All
+
+```a22
+import from "./utils.a22"
+```
+
+---
+
+## 12. Testing
+
+Tests verify system behavior.
+
+### 12.1 Structure
+
+```a22
+test "name"
+	given
+		setup
+
+	when
+		action
+
+	expect
+		assertions
+```
+
+### 12.2 Agent Tests
+
+```a22
+test "agent responds to greeting"
+	given
+		agent :assistant
+		input "Hello"
+
+	expect
+		response contains "Hello"
+		completes within 5s
+		calls model once
+```
+
+### 12.3 Workflow Tests
+
+```a22
+test "research workflow succeeds"
+	given
+		workflow :research
+		input
+			topic: "quantum computing"
+
+	expect
+		completes within 30s
+		calls web_search once
+		returns results
+		result.summary is_not empty
+```
+
+### 12.4 Tool Tests
+
+```a22
+test "search validates input"
+	given
+		tool :web_search
+		input
+			query: ""
+
+	expect
+		fails with "validation_error"
+```
+
+---
+
+## 13. Execution Model (Runtime Loop)
+
+This is the formal runtime model:
+
+```
+loop:
+  1. Receive input or trigger
+  2. Component(context, input) → new_event
+  3. Validate via policies
+  4. Append event to context
+  5. Trigger next steps / workflows
+```
+
+**Everything is an event.**
+**Nothing mutates.**
+**Time flows forward.**
+
+### 13.1 Event Flow Example
+
+```
+Input: user.message("Hello")
+  ↓
+agent("chatbot", context, "Hello") → event(agent.output, "Hi there!")
+  ↓
+context' = context + [event]
+  ↓
+trigger next handlers
+```
+
+### 13.2 Context Evolution
+
+```
+context_0 = []
+context_1 = [message.incoming]
+context_2 = [message.incoming, agent.thinking]
+context_3 = [message.incoming, agent.thinking, agent.output]
+```
+
+State views are computed from context:
+```
+conversation = filter(context, type="message.*")
+last_50 = take(conversation, 50)
+```
+
+---
+
+## 14. Design Principles
+
+- **Functional** — No mutable state; pure transformations
+- **Immutable** — All data is append-only
+- **Temporal** — Context evolves through events over time
+- **Declarative** — Users describe desired behavior, not code
+- **Natural** — English-like syntax
+- **Safe** — Policies and sandboxing built-in
+- **Portable** — Vendor-neutral provider model
+- **Deterministic** — Same context + same input = same output
+
+---
+
+## 15. Complete Example
+
+```a22
+# Providers
+provider :openai
+	type :llm
+	auth env.OPENAI_KEY
+	limits
+		requests_per_minute: 60
+
+# Tools
+tool "web_search"
+	endpoint "https://api.search.com/v1"
+	runtime :http
+	auth env.SEARCH_KEY
+
+	input
+		query: text
+		max_results: number
+
+	output
+		results: list
+
+	sandbox
+		timeout: 10s
+		network: limited
+
+# Policies
+policy :safe_mode
+	allow
+		tools [web_search]
+		capabilities [search, analyze]
+
+	limits
+		max_tokens: 10000
+		max_execution_time: 60s
+
+# Workflows
+workflow "research_topic"
+	steps
+		search = web_search
+			query: input.topic
+			max_results: 10
+
+		analysis = agent "analyst"
+			message: "Analyze these results"
+			context: search.results
+
+		approval = human_in_loop
+			show: analysis.content
+			ask: "Approve findings?"
+			options: [approve, reject]
+			timeout: 1h
+
+		branch approval
+			when "approve" -> return analysis
+			when "reject" -> return "Research rejected"
+
+# Agents
+agent "research_assistant"
+	can search, analyze, summarize
+	use model: :gpt4
+	use tools: [web_search]
+	has policy: :safe_mode
+
+	prompt :system
+		"You are a research assistant that finds and analyzes information."
+
+	state :persistent
+		backend :redis
+		ttl 24h
+
+	remembers
+		queries: last 100
+		findings: always
+
+	when user.query
+		-> .research_topic
+
+# Schedules
+schedule "daily_digest"
+	every day at "09:00" in "UTC"
+	run .research_topic
+	with
+		topic: "AI news"
+
+# Tests
+test "research completes successfully"
+	given
+		workflow :research_topic
+		input
+			topic: "quantum computing"
+
+	expect
+		completes within 30s
+		calls web_search once
+		returns results
+```
+
+---
+
+## 16. Syntax Reference
+
+### 16.1 Symbols and References
+
+- **Symbol**: `:name` - Named constant reference
+- **Reference**: `.name` - Reference to workflow/agent/tool
+
+### 16.2 Operators
+
+- **Arrow**: `->` - Action binding
+- **Range**: `..` - Numeric range (e.g., `5..8`)
+- **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=`
+
+### 16.3 Data Types
+
+- `text` - String
+- `number` - Numeric
+- `boolean` - True/false
+- `list` - Array
+- `map` - Key-value object
+- `any` - Any type
+
+### 16.4 Duration Format
+
+- `5s` - 5 seconds
+- `10m` - 10 minutes
+- `2h` - 2 hours
+- `1d` - 1 day
+
+### 16.5 Memory Size Format
+
+- `256kb` - Kilobytes
+- `128mb` - Megabytes
+- `2gb` - Gigabytes
+
+---
+
+## 17. Status & Roadmap
+
+**Current Status:** v0.1 (Not Stable)
+
+This specification defines the minimal, functional, immutable, temporal foundation of A22.
+
+**Next Steps:**
+- Reference runtime implementation
+- Standard library of tools and agents
+- Tooling (LSP, formatter, linter)
+- Examples and templates
+- Production deployment guides
+
+---
+
+## 18. License
+
+Apache 2.0
+
+---
+
+**End of Specification**
